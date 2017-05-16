@@ -1,5 +1,34 @@
 -- televator/init.lua
 
+local is_elevator, remove_elevator, add_elevator
+do
+	local elevator_positions
+	local path = minetest.get_worldpath().."/mod_televator.data"
+	do
+		local file = io.open(path, "r")
+		elevator_positions = minetest.deserialize(file:read("*all"))
+		file:close()
+	end
+	function is_elevator(pos)
+		local hashed_pos = minetest.hash_node_pos(vector.round(pos))
+		return elevator_positions[hashed_pos] or false
+	end
+	function remove_elevator(pos)
+		local hashed_pos = minetest.hash_node_pos(vector.round(pos))
+		elevator_positions[hashed_pos] = nil
+		local file = io.open(path, "w")
+		file:write(minetest.serialize(elevator_positions))
+		file:close()
+	end
+	function add_elevator(pos)
+		local hashed_pos = minetest.hash_node_pos(vector.round(pos))
+		elevator_positions[hashed_pos] = true
+		local file = io.open(path, "w")
+		file:write(minetest.serialize(elevator_positions))
+		file:close()
+	end
+end
+
 local delay = {}
 
 local itemset
@@ -82,45 +111,48 @@ if itemset then
 end
 
 -- [register] Globalstep
+local function player_step(dtime, player)
+	local pos  = player:get_pos()
+	local name = player:get_player_name()
+
+	if not delay[name] then
+		delay[name] = 0.5
+	else
+		delay[name] = delay[name] + dtime
+	end
+
+	if delay[name] <= 0.5 or minetest.get_node({x = pos.x, y = pos.y - 1, z = pos.z}).name ~= "televator:elevator") then
+		return
+	end
+	local where
+	local controls = player:get_player_control()
+	if controls.jump then
+		where = "above"
+	elseif controls.sneak then
+		where = "below"
+	else
+		return
+	end
+	local epos = get_near_elevators(pos, where)
+	if epos and is_safe(epos) then
+		player:set_pos(epos) -- Update player position
+
+		-- Play sound
+		minetest.sound_play("televator_whoosh", {
+			gain = 0.75,
+			pos = epos,
+			max_hear_distance = 5,
+		})
+	elseif epos then
+		minetest.chat_send_player(name, "Elevator blocked by obstruction")
+	else
+		minetest.chat_send_player(name, "Could not find elevator")
+	end
+
+	delay[name] = 0      -- Restart delay
+end
 minetest.register_globalstep(function(dtime)
 	for _, player in pairs(minetest.get_connected_players()) do
-		local pos  = player:get_pos()
-		local name = player:get_player_name()
-
-		if not delay[name] then
-			delay[name] = 0.5
-		else
-			delay[name] = delay[name] + dtime
-		end
-
-		if not delay[name] or delay[name] > 0.5 then
-			if minetest.get_node({x = pos.x, y = pos.y - 1, z = pos.z}).name == "televator:elevator" then
-				local where
-				local controls = player:get_player_control()
-				if controls.jump then
-					where = "above"
-				elseif controls.sneak then
-					where = "below"
-				else return end
-
-				local epos = get_near_elevators(pos, where)
-				if epos and is_safe(epos) then
-					player:set_pos(epos) -- Update player position
-
-					-- Play sound
-					minetest.sound_play("televator_whoosh", {
-						gain = 0.75,
-						pos = epos,
-						max_hear_distance = 5,
-					})
-				elseif epos then
-					minetest.chat_send_player(name, "Elevator blocked by obstruction")
-				else
-					minetest.chat_send_player(name, "Could not find elevator")
-				end
-
-				delay[name] = 0      -- Restart delay
-			end
-		end
+		player_step(dtime, player)
 	end
 end)
